@@ -1,0 +1,28 @@
+# Dependencies
+node_modules
+/.pnp
+.pnp.js
+dist
+build
+.next/
+out/
+
+# Rust / Cargo
+/target
+Cargo.lock
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+.vercel
+*.wasm
+.soroban
