@@ -6,10 +6,18 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Tests pending for Smasage Agent\" && exit 0"
+    "test": "node --loader ts-node/esm goal-projection.ts",
+    "build": "tsc",
+    "read-balances": "node --loader ts-node/esm balance-reader.ts"
   },
   "dependencies": {
     "openclaw": "^2026.3.13",
     "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@stellar/stellar-sdk": "^11.2.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
   }
 }

@@ -1,6 +1,7 @@
 "use client"
 import React, { useState, useEffect, useRef } from 'react';
 import { Bot, Send, Wallet, TrendingUp, Target, Activity, CheckCircle2 } from 'lucide-react';
+import { evaluateGoalStatus, formatCurrency, getStatusColor, type GoalData } from '../utils/goalProjection';
 
 interface Message {
   id: number;
@@ -16,6 +17,7 @@ export default function Home() {
   const [isTyping, setIsTyping] = useState(false);
 
   const [progress, setProgress] = useState(0);
+  const [goalStatus, setGoalStatus] = useState<'On Track' | 'Ahead' | 'Falling Behind'>('On Track');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto scroll
@@ -23,9 +25,19 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  // Simulate progress animation on load
+  // Calculate goal status dynamically
   useEffect(() => {
-    setTimeout(() => setProgress(68), 500);
+    const goalData: GoalData = {
+      currentBalance: 12450,
+      targetAmount: 18000,
+      targetDate: '2026-08-01',
+      monthlyContribution: 500,
+      expectedAPY: 8.5,
+    };
+    
+    const result = evaluateGoalStatus(goalData);
+    setGoalStatus(result.status);
+    setProgress(result.progressPercentage);
   }, []);
 
   const handleSendMessage = (e: React.FormEvent) => {
@@ -86,8 +98,11 @@ export default function Home() {
             <div>
               <h3 style={{ fontSize: '1.25rem', marginBottom: '4px' }}>European Vacation</h3>
               <p className="text-muted" style={{ fontSize: '0.9rem' }}>Target: $18,000 by Aug 2026</p>
+              <p style={{ fontSize: '0.85rem', color: getStatusColor(goalStatus), fontWeight: 600, marginTop: '4px' }}>
+                Status: {goalStatus}
+              </p>
             </div>
-            <Target size={32} color="var(--success)" opacity={0.8} />
+            <Target size={32} color={getStatusColor(goalStatus)} opacity={0.8} />
           </div>
 
           <div className="progress-bar-container">
