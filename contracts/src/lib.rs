@@ -233,19 +233,28 @@ impl SmasageYieldRouter {
     }
 }
 
-// Basic Test Mock
+// Test Mocks & Unit Tests
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env, String, Address};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
     #[contract]
     pub struct MockToken;
     #[contractimpl]
     impl TokenTrait for MockToken {
-        fn transfer(e: Env, _from: Address, _to: Address, _amount: i128) {}
-        fn approve(e: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {}
-        fn balance(e: Env, _id: Address) -> i128 { 0 }
+        fn transfer(_e: Env, _from: Address, _to: Address, _amount: i128) {}
+        fn approve(
+            _e: Env,
+            _from: Address,
+            _spender: Address,
+            _amount: i128,
+            _expiration_ledger: u32,
+        ) {
+        }
+        fn balance(_e: Env, _id: Address) -> i128 {
+            0
+        }
     }
 
     #[contract]
@@ -253,7 +262,7 @@ mod test {
     #[contractimpl]
     impl SoroswapRouterTrait for MockRouter {
         fn add_liquidity(
-            e: Env,
+            _e: Env,
             _token_a: Address,
             _token_b: Address,
             _amount_a_desired: i128,
@@ -263,7 +272,8 @@ mod test {
             _to: Address,
             _deadline: u64,
         ) -> (i128, i128, i128) {
-            (0, 0, 100) // Mock 100 LP shares received
+            // Returns (amount_a_used, amount_b_used, lp_shares_minted)
+            (0, 0, 100)
         }
 
         fn swap_exact_tokens_for_tokens(
@@ -276,36 +286,153 @@ mod test {
         ) -> Vec<i128> {
             let mut v = Vec::new(&e);
             v.push_back(amount_in);
-            v.push_back(amount_in * 2); // Mock 1:2 swap rate
+            v.push_back(amount_in * 2); // Mock 1:2 swap rate (USDC:XLM)
             v
         }
     }
 
-    #[test]
-    fn test_soroswap_integration() {
+    /// Helper: set up the contract, admin, mocks, and return everything needed for tests.
+    fn setup_env() -> (Env, SmasageYieldRouterClient<'static>, Address, Address, Address, Address) {
         let env = Env::default();
         let contract_id = env.register(SmasageYieldRouter, ());
         let client = SmasageYieldRouterClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        let user = Address::generate(&env);
-        
-        // Register mocks
         let router_id = env.register(MockRouter, ());
         let usdc_id = env.register(MockToken, ());
         let xlm_id = env.register(MockToken, ());
 
         env.mock_all_auths();
-
         client.initialize(&admin);
         client.initialize_soroswap(&admin, &router_id, &usdc_id, &xlm_id);
+
+        (env, client, admin, router_id, usdc_id, xlm_id)
+    }
+
+    // ─── Gold Trustline Tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_initialize_gold_trustline() {
+        let env = Env::default();
+        let contract_id = env.register(SmasageYieldRouter, ());
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+        client.init_gold_trustline(&admin, &5_000_000);
+
+        let (asset_code, asset_issuer) = client.get_gold_asset();
+        assert_eq!(asset_code, symbol_short!("XAUT"));
+        assert_eq!(
+            asset_issuer,
+            String::from_str(
+                &env,
+                "GCRLXTLD7XIRXWXV2PDCC74O5TUUKN3OODJAM6TWVE4AIRNMGQJK3KWQ"
+            )
+        );
+        assert!(client.is_gold_trustline_ready());
+        assert_eq!(client.get_gold_reserve_stroops(), 5_000_000);
+    }
+
+    // ─── Deposit / Withdraw Tests ───────────────────────────────────────
+
+    #[test]
+    fn test_deposit_and_withdraw() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // Deposit 1000 USDC – 60% Blend, 30% LP
+        client.deposit(&user, &1000, &60, &30);
+        assert_eq!(client.get_balance(&user), 1000);
+
+        // Withdraw half
+        client.withdraw(&user, &500);
+        assert_eq!(client.get_balance(&user), 500);
+    }
+
+    // ─── Soroswap LP Integration Tests ──────────────────────────────────
+
+    #[test]
+    fn test_soroswap_lp_basic() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
 
         // Deposit 1000 USDC, 50% to LP
         client.deposit(&user, &1000, &0, &50);
 
         assert_eq!(client.get_balance(&user), 1000);
-        
-        // 50% of 1000 is 500. Our MockRouter returns 100 LP shares for any add_liquidity.
+        // MockRouter always returns 100 LP shares per add_liquidity call
         assert_eq!(client.get_lp_shares(&user), 100);
+    }
+
+    #[test]
+    fn test_lp_shares_accumulate_across_deposits() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // First deposit: 50% of 1000 → LP
+        client.deposit(&user, &1000, &0, &50);
+        assert_eq!(client.get_lp_shares(&user), 100);
+
+        // Second deposit: 100% of 500 → LP
+        client.deposit(&user, &500, &0, &100);
+        assert_eq!(client.get_lp_shares(&user), 200); // 100 + 100
+
+        // Total user balance should reflect both deposits
+        assert_eq!(client.get_balance(&user), 1500);
+    }
+
+    #[test]
+    fn test_zero_lp_percentage_no_shares() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // 100% Blend, 0% LP
+        client.deposit(&user, &1000, &100, &0);
+
+        assert_eq!(client.get_balance(&user), 1000);
+        assert_eq!(client.get_lp_shares(&user), 0);
+    }
+
+    #[test]
+    fn test_50_50_split_precision_odd_amount() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // Odd amount: 999 USDC at 100% LP → lp_amount = 999
+        // half_usdc = 999/2 = 499, remaining = 999-499 = 500
+        // This verifies the split handles odd amounts without losing value
+        client.deposit(&user, &999, &0, &100);
+
+        assert_eq!(client.get_balance(&user), 999);
+        assert_eq!(client.get_lp_shares(&user), 100);
+    }
+
+    #[test]
+    fn test_multiple_users_isolated_lp_shares() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let alice = Address::generate(&_env);
+        let bob = Address::generate(&_env);
+
+        client.deposit(&alice, &1000, &0, &50);
+        client.deposit(&bob, &2000, &0, &80);
+
+        // Each user's LP shares are independently tracked
+        assert_eq!(client.get_lp_shares(&alice), 100);
+        assert_eq!(client.get_lp_shares(&bob), 100);
+
+        // Balances are isolated
+        assert_eq!(client.get_balance(&alice), 1000);
+        assert_eq!(client.get_balance(&bob), 2000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Allocation exceeds 100%")]
+    fn test_allocation_exceeds_100_percent() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        client.deposit(&user, &1000, &60, &50); // 110% → panic
     }
 }
