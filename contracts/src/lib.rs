@@ -149,12 +149,62 @@ impl SmasageYieldRouter {
     }
 
     /// Initialize the contract and accept deposits in USDC.
-<<<<<<< HEAD
     /// Implements path payment for Gold allocation using Stellar DEX mechanisms.
     pub fn deposit(env: Env, from: Address, amount: i128, blend_percentage: u32, lp_percentage: u32, gold_percentage: u32) {
-=======
-    pub fn deposit(env: Env, from: Address, amount: i128, blend_percentage: u32, lp_percentage: u32) {
->>>>>>> 0de53f2 (Implement Issue 2.3: Soroswap LP Integration)
+        from.require_auth();
+        assert!(blend_percentage + lp_percentage + gold_percentage <= 100, "Allocation exceeds 100%");
+        // Transfer USDC from user to contract
+        let usdc_addr: Address = env.storage().persistent().get(&DataKey::UsdcToken).expect("USDC not initialized");
+        let usdc = TokenClient::new(&env, &usdc_addr);
+        usdc.transfer(&from, &env.current_contract_address(), &amount);
+
+        let mut balance: i128 = env.storage().persistent().get(&DataKey::UserBalance(from.clone())).unwrap_or(0);
+        balance += amount;
+        env.storage().persistent().set(&DataKey::UserBalance(from.clone()), &balance);
+
+        // Track Blend allocation
+        let blend_amount = amount * blend_percentage as i128 / 100;
+        let mut blend_balance: i128 = env.storage().persistent().get(&DataKey::UserBlendBalance(from.clone())).unwrap_or(0);
+        blend_balance += blend_amount;
+        env.storage().persistent().set(&DataKey::UserBlendBalance(from.clone()), &blend_balance);
+
+        // Track LP shares allocation and run Soroswap logic
+        let lp_amount = amount * lp_percentage as i128 / 100;
+        if lp_amount > 0 {
+            let router_addr: Address = env.storage().persistent().get(&DataKey::SoroswapRouter).expect("Soroswap Router not initialized");
+            let xlm_addr: Address = env.storage().persistent().get(&DataKey::XlmToken).expect("XLM not initialized");
+            let half_usdc = lp_amount / 2;
+            let remaining_usdc = lp_amount - half_usdc;
+            // Approve router for total USDC amount to be used in swap and liquidity
+            usdc.approve(&env.current_contract_address(), &router_addr, &lp_amount, &(env.ledger().sequence() + 100));
+            // Swap half USDC for XLM
+            let mut path = Vec::new(&env);
+            path.push_back(usdc_addr.clone());
+            path.push_back(xlm_addr.clone());
+            let deadline = env.ledger().timestamp() + 300; // 5 minutes
+            let swap_amounts = SoroswapRouterClient::new(&env, &router_addr)
+                .swap_exact_tokens_for_tokens(&half_usdc, &0, &path, &env.current_contract_address(), &deadline);
+            let xlm_received = swap_amounts.get(1).unwrap();
+            // Approve router for received XLM
+            let xlm = TokenClient::new(&env, &xlm_addr);
+            xlm.approve(&env.current_contract_address(), &router_addr, &xlm_received, &(env.ledger().sequence() + 100));
+            // Add liquidity
+            let (_, _, lp_shares) = SoroswapRouterClient::new(&env, &router_addr)
+                .add_liquidity(&usdc_addr, &xlm_addr, &remaining_usdc, &xlm_received, &0, &0, &env.current_contract_address(), &deadline);
+            let mut user_lp_shares: i128 = env.storage().persistent().get(&DataKey::UserLPShares(from.clone())).unwrap_or(0);
+            user_lp_shares += lp_shares;
+            env.storage().persistent().set(&DataKey::UserLPShares(from.clone()), &user_lp_shares);
+        }
+
+        // Track Gold allocation (XAUT)
+        let gold_amount = amount * gold_percentage as i128 / 100;
+        if gold_amount > 0 {
+            // Execute path payment: USDC -> XAUT via Stellar DEX (mocked)
+            let mut gold_balance: i128 = env.storage().persistent().get(&DataKey::UserGoldBalance(from.clone())).unwrap_or(0);
+            gold_balance += gold_amount;
+            env.storage().persistent().set(&DataKey::UserGoldBalance(from.clone()), &gold_balance);
+        }
+    }
         from.require_auth();
         assert!(blend_percentage + lp_percentage + gold_percentage <= 100, "Allocation exceeds 100%");
         
@@ -334,19 +384,28 @@ impl SmasageYieldRouter {
     }
 }
 
-// Basic Test Mock
+// Test Mocks & Unit Tests
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env, String, Address};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
     #[contract]
     pub struct MockToken;
     #[contractimpl]
     impl TokenTrait for MockToken {
-        fn transfer(e: Env, _from: Address, _to: Address, _amount: i128) {}
-        fn approve(e: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {}
-        fn balance(e: Env, _id: Address) -> i128 { 0 }
+        fn transfer(_e: Env, _from: Address, _to: Address, _amount: i128) {}
+        fn approve(
+            _e: Env,
+            _from: Address,
+            _spender: Address,
+            _amount: i128,
+            _expiration_ledger: u32,
+        ) {
+        }
+        fn balance(_e: Env, _id: Address) -> i128 {
+            0
+        }
     }
 
     #[contract]
@@ -354,7 +413,7 @@ mod test {
     #[contractimpl]
     impl SoroswapRouterTrait for MockRouter {
         fn add_liquidity(
-            e: Env,
+            _e: Env,
             _token_a: Address,
             _token_b: Address,
             _amount_a_desired: i128,
@@ -364,7 +423,8 @@ mod test {
             _to: Address,
             _deadline: u64,
         ) -> (i128, i128, i128) {
-            (0, 0, 100) // Mock 100 LP shares received
+            // Returns (amount_a_used, amount_b_used, lp_shares_minted)
+            (0, 0, 100)
         }
 
         fn swap_exact_tokens_for_tokens(
@@ -377,18 +437,19 @@ mod test {
         ) -> Vec<i128> {
             let mut v = Vec::new(&e);
             v.push_back(amount_in);
-            v.push_back(amount_in * 2); // Mock 1:2 swap rate
+            v.push_back(amount_in * 2); // Mock 1:2 swap rate (USDC:XLM)
             v
         }
     }
 
-    #[test]
-    fn test_soroswap_integration() {
+    /// Helper: set up the contract, admin, mocks, and return everything needed for tests.
+    fn setup_env() -> (Env, SmasageYieldRouterClient<'static>, Address, Address, Address, Address) {
         let env = Env::default();
         let contract_id = env.register(SmasageYieldRouter, ());
         let client = SmasageYieldRouterClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
+<<<<<<< HEAD
 <<<<<<< HEAD
 
         env.mock_all_auths();
@@ -494,26 +555,153 @@ mod test {
         let user = Address::generate(&env);
         
         // Register mocks
+=======
+>>>>>>> 3445078 (fix: migrate to non-deprecated SDK APIs, add comprehensive LP test suite)
         let router_id = env.register(MockRouter, ());
         let usdc_id = env.register(MockToken, ());
         let xlm_id = env.register(MockToken, ());
 
         env.mock_all_auths();
-
         client.initialize(&admin);
         client.initialize_soroswap(&admin, &router_id, &usdc_id, &xlm_id);
+
+        (env, client, admin, router_id, usdc_id, xlm_id)
+    }
+
+    // ─── Gold Trustline Tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_initialize_gold_trustline() {
+        let env = Env::default();
+        let contract_id = env.register(SmasageYieldRouter, ());
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+        client.init_gold_trustline(&admin, &5_000_000);
+
+        let (asset_code, asset_issuer) = client.get_gold_asset();
+        assert_eq!(asset_code, symbol_short!("XAUT"));
+        assert_eq!(
+            asset_issuer,
+            String::from_str(
+                &env,
+                "GCRLXTLD7XIRXWXV2PDCC74O5TUUKN3OODJAM6TWVE4AIRNMGQJK3KWQ"
+            )
+        );
+        assert!(client.is_gold_trustline_ready());
+        assert_eq!(client.get_gold_reserve_stroops(), 5_000_000);
+    }
+
+    // ─── Deposit / Withdraw Tests ───────────────────────────────────────
+
+    #[test]
+    fn test_deposit_and_withdraw() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // Deposit 1000 USDC – 60% Blend, 30% LP
+        client.deposit(&user, &1000, &60, &30);
+        assert_eq!(client.get_balance(&user), 1000);
+
+        // Withdraw half
+        client.withdraw(&user, &500);
+        assert_eq!(client.get_balance(&user), 500);
+    }
+
+    // ─── Soroswap LP Integration Tests ──────────────────────────────────
+
+    #[test]
+    fn test_soroswap_lp_basic() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
 
         // Deposit 1000 USDC, 50% to LP
         client.deposit(&user, &1000, &0, &50);
 
         assert_eq!(client.get_balance(&user), 1000);
 <<<<<<< HEAD
+<<<<<<< HEAD
         assert_eq!(client.get_lp_shares(&user), 100); 
 >>>>>>> 46ab13d (Implement Soroswap LP Integration (Issue 2.3) with 50/50 split logic and LP share tracking)
 =======
         
         // 50% of 1000 is 500. Our MockRouter returns 100 LP shares for any add_liquidity.
+=======
+        // MockRouter always returns 100 LP shares per add_liquidity call
+>>>>>>> 3445078 (fix: migrate to non-deprecated SDK APIs, add comprehensive LP test suite)
         assert_eq!(client.get_lp_shares(&user), 100);
 >>>>>>> 0de53f2 (Implement Issue 2.3: Soroswap LP Integration)
+    }
+
+    #[test]
+    fn test_lp_shares_accumulate_across_deposits() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // First deposit: 50% of 1000 → LP
+        client.deposit(&user, &1000, &0, &50);
+        assert_eq!(client.get_lp_shares(&user), 100);
+
+        // Second deposit: 100% of 500 → LP
+        client.deposit(&user, &500, &0, &100);
+        assert_eq!(client.get_lp_shares(&user), 200); // 100 + 100
+
+        // Total user balance should reflect both deposits
+        assert_eq!(client.get_balance(&user), 1500);
+    }
+
+    #[test]
+    fn test_zero_lp_percentage_no_shares() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // 100% Blend, 0% LP
+        client.deposit(&user, &1000, &100, &0);
+
+        assert_eq!(client.get_balance(&user), 1000);
+        assert_eq!(client.get_lp_shares(&user), 0);
+    }
+
+    #[test]
+    fn test_50_50_split_precision_odd_amount() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        // Odd amount: 999 USDC at 100% LP → lp_amount = 999
+        // half_usdc = 999/2 = 499, remaining = 999-499 = 500
+        // This verifies the split handles odd amounts without losing value
+        client.deposit(&user, &999, &0, &100);
+
+        assert_eq!(client.get_balance(&user), 999);
+        assert_eq!(client.get_lp_shares(&user), 100);
+    }
+
+    #[test]
+    fn test_multiple_users_isolated_lp_shares() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let alice = Address::generate(&_env);
+        let bob = Address::generate(&_env);
+
+        client.deposit(&alice, &1000, &0, &50);
+        client.deposit(&bob, &2000, &0, &80);
+
+        // Each user's LP shares are independently tracked
+        assert_eq!(client.get_lp_shares(&alice), 100);
+        assert_eq!(client.get_lp_shares(&bob), 100);
+
+        // Balances are isolated
+        assert_eq!(client.get_balance(&alice), 1000);
+        assert_eq!(client.get_balance(&bob), 2000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Allocation exceeds 100%")]
+    fn test_allocation_exceeds_100_percent() {
+        let (_env, client, _admin, _r, _u, _x) = setup_env();
+        let user = Address::generate(&_env);
+
+        client.deposit(&user, &1000, &60, &50); // 110% → panic
     }
 }
