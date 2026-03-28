@@ -1,57 +1,78 @@
-import dotenv from "dotenv";
-// Mock import for OpenClaw framework (refer to issues.md #1)
-// import { Agent, ChatInterface } from 'openclaw';
+import readline from "readline";
 
-dotenv.config();
+const SYSTEM_PROMPT = `You are Smasage, an intelligent financial assistant.
+You help users read balances and project financial goals on the Stellar network.`;
 
-console.log("==========================================");
-console.log("🚀 Smasage OpenClaw Agent Starting...");
-console.log("==========================================");
+const API_KEY = process.env.ANTHROPIC_API_KEY;
 
-/**
- * The core logic for Smasage savings strategy generation.
- * This file serves as scaffolding for Issue 1 and 5.
- */
-class SmasageAgent {
-  constructor() {
-    this.name = "Smasage AI";
-    this.status = "Initializing";
-    this.allocations = {
-      blend: 60,
-      soroswapLP: 30,
-      tetherGold: 10,
-    };
-  }
-
-  async setGoal(goalDescription, timeframe, riskTolerance) {
-    console.log(
-      `Setting Goal: ${goalDescription} over ${timeframe} with Risk: ${riskTolerance}`,
-    );
-    // Issue 1: Convert conversational input into JSON payload
-    return {
-      status: "active",
-      goal: goalDescription,
-      targetDate: timeframe,
-      recommendedStrategy: this.allocations,
-    };
-  }
-
-  async checkOnChainBalances(userStellarAddress) {
-    // Issue 5: Dynamic Portfolio Monitoring connecting to Soroban endpoint
-    console.log(`Checking balances on Stellar for ${userStellarAddress}`);
-    return { balanceUSDC: 1540.23, roi: 12.4 };
-  }
+if (!API_KEY) {
+  console.error("ERROR: ANTHROPIC_API_KEY is not set in your .env file.");
+  process.exit(1);
 }
 
-const agent = new SmasageAgent();
+async function chat(userMessage, history = []) {
+  const messages = [
+    ...history,
+    { role: "user", content: userMessage }
+  ];
 
-// Simulating execution
-(async () => {
-  const strategy = await agent.setGoal(
-    "Save $5,000 for travel",
-    "12 months",
-    "Moderate",
-  );
-  console.log("Strategy Set: ", strategy);
-  console.log("✅ Agent running and ready to accept client connections.");
-})();
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-opus-4-6",
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Anthropic API error: ${res.status} — ${err}`);
+  }
+
+  const dat= await res.json();
+  return data.content[0].text;
+}
+
+async function main() {
+  console.log("Smasage agent started. Type your message or 'exit' to quit.\n");
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const history = [];
+
+  const ask = () => {
+    rl.question("You: ", async (input) => {
+      const trimmed = input.trim();
+      if (!trimmed || trimmed.toLowerCase() === "exit") {
+        console.log("Goodbye!");
+        rl.close();
+        return;
+      }
+
+      try {
+        const reply = await chat(trimmed, history);
+        history.push({ role: "user", content: trimmed });
+        history.push({ role: "assistant", content: reply });
+        console.log(`\nSmasage: ${reply}\n`);
+      } catch (err) {
+        console.error("Error:", err.message);
+      }
+
+      ask();
+    });
+  };
+
+  ask();
+}
+
+main();

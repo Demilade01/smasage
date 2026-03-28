@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
+    "start": "node --env-file=.env index.js",
     "test": "node --loader ts-node/esm goal-projection.ts",
     "build": "tsc",
     "read-balances": "node --loader ts-node/esm balance-reader.ts"

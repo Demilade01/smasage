@@ -28,3 +28,4 @@ Thumbs.db
 *.wasm
 .soroban
 issues.md
+.env
