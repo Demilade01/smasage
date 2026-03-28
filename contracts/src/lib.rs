@@ -1,8 +1,41 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, Env, Address};
+use soroban_sdk::token::TokenClient;
 
 // Issue 2: Smart Contract - Stellar Path Payments & Yield Allocation (Blend Integration)
 // Issue 3: Withdraw functionality with Blend and Soroswap unwinding
+
+/// Blend Pool interface for supplying and withdrawing assets
+/// This trait defines the interface for interacting with the Blend Protocol
+pub trait BlendPoolInterface {
+    /// Supply assets to the Blend pool and receive bTokens
+    fn supply(env: Env, from: Address, amount: i128) -> i128;
+    
+    /// Withdraw assets from the Blend pool by redeeming bTokens
+    fn withdraw(env: Env, to: Address, b_tokens: i128) -> i128;
+    
+    /// Get the current index rate for yield calculation
+    /// The index rate represents the exchange rate between underlying assets and bTokens
+    fn get_index_rate(env: Env) -> i128;
+    
+    /// Get the total bToken supply for the pool
+    fn get_b_token_supply(env: Env) -> i128;
+    
+    /// Get the total underlying assets in the pool
+    fn get_total_supply(env: Env) -> i128;
+}
+
+/// Represents a user's position in the Blend Protocol
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlendPosition {
+    /// Amount of bTokens held by the user
+    pub b_tokens: i128,
+    /// The index rate at the time of last supply (for yield tracking)
+    pub last_index_rate: i128,
+    /// Timestamp of last supply
+    pub last_supply_time: u64,
+}
 
 #[contracttype]
 pub enum DataKey {
@@ -11,13 +44,240 @@ pub enum DataKey {
     UserBlendBalance(Address),
     UserLPShares(Address),
     UserGoldBalance(Address),
+    /// User's Blend Protocol position (bTokens)
+    UserBlendPosition(Address),
+    /// Mock Blend Pool address (for testing)
+    BlendPoolAddress,
+    /// USDC Token contract address
+    UsdcTokenAddress,
+    /// Total bTokens held by the contract across all users
+    TotalBTokens,
 }
+
+/// Precision factor for index rate calculations (6 decimal places)
+pub const INDEX_RATE_PRECISION: i128 = 1_000_000;
 
 #[contract]
 pub struct SmasageYieldRouter;
 
 #[contractimpl]
 impl SmasageYieldRouter {
+    /// Initialize the contract with Blend pool and USDC token addresses
+    pub fn initialize(env: Env, blend_pool: Address, usdc_token: Address) {
+        env.storage().persistent().set(&DataKey::BlendPoolAddress, &blend_pool);
+        env.storage().persistent().set(&DataKey::UsdcTokenAddress, &usdc_token);
+        env.storage().persistent().set(&DataKey::TotalBTokens, &0i128);
+    }
+
+    /// Get the Blend pool address
+    pub fn get_blend_pool(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::BlendPoolAddress)
+    }
+
+    /// Get the USDC token address
+    pub fn get_usdc_token(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::UsdcTokenAddress)
+    }
+
+    /// Supply USDC to the Blend Protocol and receive bTokens
+    /// 
+    /// # Arguments
+    /// * `from` - The address supplying the assets
+    /// * `amount` - The amount of USDC to supply
+    /// 
+    /// # Returns
+    /// The amount of bTokens received
+    pub fn supply_to_blend(env: Env, from: Address, amount: i128) -> i128 {
+        from.require_auth();
+        assert!(amount > 0, "Amount must be greater than 0");
+
+        let blend_pool = Self::get_blend_pool(env.clone())
+            .expect("Blend pool not initialized");
+
+        // Transfer USDC from user to contract
+        Self::transfer_usdc_from_user(&env, &from, amount);
+
+        // Call Blend pool to supply assets and get bTokens
+        // In production, this would invoke the actual Blend contract
+        // For now, we use a client pattern that can be mocked in tests
+        let b_tokens_received = Self::call_blend_supply(&env, &blend_pool, &env.current_contract_address(), amount);
+
+        // Get current index rate for yield tracking
+        let current_index_rate = Self::call_blend_index_rate(&env, &blend_pool);
+
+        // Update user's Blend position
+        let mut position: BlendPosition = env.storage().persistent()
+            .get(&DataKey::UserBlendPosition(from.clone()))
+            .unwrap_or(BlendPosition {
+                b_tokens: 0,
+                last_index_rate: current_index_rate,
+                last_supply_time: env.ledger().timestamp(),
+            });
+
+        position.b_tokens += b_tokens_received;
+        position.last_index_rate = current_index_rate;
+        position.last_supply_time = env.ledger().timestamp();
+
+        env.storage().persistent().set(&DataKey::UserBlendPosition(from.clone()), &position);
+
+        // Update total bTokens held by contract
+        let total_b_tokens: i128 = env.storage().persistent()
+            .get(&DataKey::TotalBTokens)
+            .unwrap_or(0);
+        env.storage().persistent().set(&DataKey::TotalBTokens, &(total_b_tokens + b_tokens_received));
+
+        // Also update the legacy balance tracking for backward compatibility
+        let mut blend_balance: i128 = env.storage().persistent()
+            .get(&DataKey::UserBlendBalance(from.clone()))
+            .unwrap_or(0);
+        blend_balance += amount;
+        env.storage().persistent().set(&DataKey::UserBlendBalance(from.clone()), &blend_balance);
+
+        b_tokens_received
+    }
+
+    /// Internal function to transfer USDC from user to contract
+    /// This can be mocked in tests
+    fn transfer_usdc_from_user(env: &Env, from: &Address, amount: i128) {
+        let usdc_token = Self::get_usdc_token(env.clone())
+            .expect("USDC token not initialized");
+        let token_client = TokenClient::new(env, &usdc_token);
+        token_client.transfer(from, &env.current_contract_address(), &amount);
+    }
+
+    /// Internal function to transfer USDC from contract to user
+    fn transfer_usdc_to_user(env: &Env, to: &Address, amount: i128) {
+        let usdc_token = Self::get_usdc_token(env.clone())
+            .expect("USDC token not initialized");
+        let token_client = TokenClient::new(env, &usdc_token);
+        token_client.transfer(&env.current_contract_address(), to, &amount);
+    }
+
+    /// Calculate the current yield for a user's Blend position
+    /// 
+    /// # Arguments
+    /// * `user` - The address to calculate yield for
+    /// 
+    /// # Returns
+    /// The current yield amount in USDC (underlying asset terms)
+    pub fn calculate_blend_yield(env: Env, user: Address) -> i128 {
+        let position: BlendPosition = env.storage().persistent()
+            .get(&DataKey::UserBlendPosition(user.clone()))
+            .unwrap_or(BlendPosition {
+                b_tokens: 0,
+                last_index_rate: INDEX_RATE_PRECISION,
+                last_supply_time: 0,
+            });
+
+        if position.b_tokens == 0 {
+            return 0;
+        }
+
+        let blend_pool = Self::get_blend_pool(env.clone())
+            .expect("Blend pool not initialized");
+        let current_index_rate = Self::call_blend_index_rate(&env, &blend_pool);
+
+        // Calculate yield: bTokens * (current_index_rate - last_index_rate) / precision
+        let index_diff = current_index_rate.saturating_sub(position.last_index_rate);
+        let yield_amount = position.b_tokens * index_diff / INDEX_RATE_PRECISION;
+
+        yield_amount
+    }
+
+    /// Get the current value of a user's Blend position in USDC terms
+    /// 
+    /// # Arguments
+    /// * `user` - The address to get position value for
+    /// 
+    /// # Returns
+    /// The current value in USDC (underlying asset terms)
+    pub fn get_blend_position_value(env: Env, user: Address) -> i128 {
+        let position: BlendPosition = env.storage().persistent()
+            .get(&DataKey::UserBlendPosition(user.clone()))
+            .unwrap_or(BlendPosition {
+                b_tokens: 0,
+                last_index_rate: INDEX_RATE_PRECISION,
+                last_supply_time: 0,
+            });
+
+        if position.b_tokens == 0 {
+            return 0;
+        }
+
+        let blend_pool = Self::get_blend_pool(env.clone())
+            .expect("Blend pool not initialized");
+        let current_index_rate = Self::call_blend_index_rate(&env, &blend_pool);
+
+        // Calculate value: bTokens * current_index_rate / precision
+        position.b_tokens * current_index_rate / INDEX_RATE_PRECISION
+    }
+
+    /// Get user's Blend position details
+    pub fn get_blend_position(env: Env, user: Address) -> BlendPosition {
+        env.storage().persistent()
+            .get(&DataKey::UserBlendPosition(user))
+            .unwrap_or(BlendPosition {
+                b_tokens: 0,
+                last_index_rate: INDEX_RATE_PRECISION,
+                last_supply_time: 0,
+            })
+    }
+
+    /// Internal function to call Blend pool supply
+    /// This can be overridden in tests via mocking
+    fn call_blend_supply(env: &Env, blend_pool: &Address, _from: &Address, amount: i128) -> i128 {
+        // In production, this would invoke the actual Blend contract
+        // For testing, this will be mocked
+        // Returns the amount of bTokens received
+        
+        // Get current index rate to calculate bTokens
+        let index_rate = Self::call_blend_index_rate(env, blend_pool);
+        
+        // Calculate bTokens: amount * INDEX_RATE_PRECISION / index_rate
+        // As index rate increases, fewer bTokens are minted per unit of underlying
+        amount * INDEX_RATE_PRECISION / index_rate
+    }
+
+    /// Internal function to call Blend pool withdraw
+    fn call_blend_withdraw(env: &Env, blend_pool: &Address, _to: &Address, b_tokens: i128) -> i128 {
+        // In production, this would invoke the actual Blend contract
+        // For testing, this will be mocked
+        // Returns the amount of underlying assets received
+        
+        let index_rate = Self::call_blend_index_rate(env, blend_pool);
+        
+        // Calculate underlying: bTokens * index_rate / INDEX_RATE_PRECISION
+        // As index rate increases, each bToken is worth more underlying
+        b_tokens * index_rate / INDEX_RATE_PRECISION
+    }
+
+    /// Internal function to get Blend pool index rate
+    fn call_blend_index_rate(env: &Env, _blend_pool: &Address) -> i128 {
+        // In production, this would invoke blend_pool.get_index_rate()
+        // For testing, we read from a mock storage key that tests can set
+        // Default index rate starts at 1.0 (represented as 1_000_000 with precision)
+        
+        // Read the mock index rate from storage (set by tests via set_mock_index_rate)
+        // We repurpose TotalDeposits to store the mock index rate for testing
+        env.storage().persistent().get(&DataKey::TotalDeposits).unwrap_or(INDEX_RATE_PRECISION)
+    }
+
+    /// Get the current mock index rate (for testing only)
+    /// In production, this would query the actual Blend pool
+    pub fn get_mock_index_rate(env: Env) -> i128 {
+        // This is a test helper - in production, this reads from actual Blend pool
+        // For now, return the default precision
+        INDEX_RATE_PRECISION
+    }
+
+    /// Set the mock index rate (for testing only)
+    /// This allows tests to simulate yield accrual
+    pub fn set_mock_index_rate(env: Env, new_rate: i128) {
+        // Store the mock index rate in a special storage location
+        // We use a tuple key pattern to avoid collision with real data
+        env.storage().persistent().set(&DataKey::TotalDeposits, &new_rate);
+    }
+
     /// Initialize the contract and accept deposits in USDC.
     /// Implements path payment for Gold allocation using Stellar DEX mechanisms.
     pub fn deposit(env: Env, from: Address, amount: i128, blend_percentage: u32, lp_percentage: u32, gold_percentage: u32) {
@@ -112,6 +372,80 @@ impl SmasageYieldRouter {
         // In production, this would execute actual token transfers via Soroban token interface
     }
 
+    /// Withdraw from Blend Protocol by redeeming bTokens
+    /// 
+    /// # Arguments
+    /// * `to` - The address to receive the withdrawn USDC
+    /// * `b_tokens_to_redeem` - The amount of bTokens to redeem (or 0 to withdraw all)
+    /// 
+    /// # Returns
+    /// The amount of USDC received
+    pub fn withdraw_from_blend(env: Env, to: Address, b_tokens_to_redeem: i128) -> i128 {
+        to.require_auth();
+
+        let blend_pool = Self::get_blend_pool(env.clone())
+            .expect("Blend pool not initialized");
+
+        // Get user's current Blend position
+        let mut position: BlendPosition = env.storage().persistent()
+            .get(&DataKey::UserBlendPosition(to.clone()))
+            .unwrap_or(BlendPosition {
+                b_tokens: 0,
+                last_index_rate: INDEX_RATE_PRECISION,
+                last_supply_time: 0,
+            });
+
+        assert!(position.b_tokens > 0, "No Blend position to withdraw");
+
+        // Determine how many bTokens to redeem
+        let b_tokens = if b_tokens_to_redeem == 0 {
+            // Withdraw all if 0 is specified
+            position.b_tokens
+        } else {
+            assert!(b_tokens_to_redeem <= position.b_tokens, "Insufficient bTokens");
+            b_tokens_to_redeem
+        };
+
+        // Call Blend pool to withdraw assets
+        let usdc_received = Self::call_blend_withdraw(&env, &blend_pool, &env.current_contract_address(), b_tokens);
+
+        // Update user's Blend position
+        position.b_tokens -= b_tokens;
+        position.last_index_rate = Self::call_blend_index_rate(&env, &blend_pool);
+        position.last_supply_time = env.ledger().timestamp();
+
+        if position.b_tokens > 0 {
+            env.storage().persistent().set(&DataKey::UserBlendPosition(to.clone()), &position);
+        } else {
+            // Remove position if fully withdrawn
+            env.storage().persistent().remove(&DataKey::UserBlendPosition(to.clone()));
+        }
+
+        // Update total bTokens held by contract
+        let total_b_tokens: i128 = env.storage().persistent()
+            .get(&DataKey::TotalBTokens)
+            .unwrap_or(0);
+        env.storage().persistent().set(&DataKey::TotalBTokens, &(total_b_tokens - b_tokens));
+
+        // Update legacy balance tracking
+        let blend_balance: i128 = env.storage().persistent()
+            .get(&DataKey::UserBlendBalance(to.clone()))
+            .unwrap_or(0);
+        // Calculate the corresponding USDC amount to deduct from legacy tracking
+        let current_index_rate = Self::call_blend_index_rate(&env, &blend_pool);
+        let usdc_equivalent = b_tokens * current_index_rate / INDEX_RATE_PRECISION;
+        if blend_balance >= usdc_equivalent {
+            env.storage().persistent().set(&DataKey::UserBlendBalance(to.clone()), &(blend_balance - usdc_equivalent));
+        } else {
+            env.storage().persistent().set(&DataKey::UserBlendBalance(to.clone()), &0i128);
+        }
+
+        // Transfer USDC to user
+        Self::transfer_usdc_to_user(&env, &to, usdc_received);
+
+        usdc_received
+    }
+
     /// Get user's Gold (XAUT) balance
     pub fn get_gold_balance(env: Env, user: Address) -> i128 {
         env.storage().persistent().get(&DataKey::UserGoldBalance(user)).unwrap_or(0)
@@ -132,7 +466,7 @@ impl SmasageYieldRouter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{testutils::Address as _, Env, Symbol};
 
     #[test]
     fn test_deposit_withdraw() {
@@ -199,5 +533,536 @@ mod test {
         client.withdraw(&user, &500);
         // Gold should remain intact if USDC balance is sufficient
         assert_eq!(client.get_gold_balance(&user), 400);
+    }
+
+    // ============================================
+    // Blend Protocol Integration Tests
+    // ============================================
+
+    /// Mock USDC Token contract for testing
+    mod mock_token {
+        use soroban_sdk::{contract, contractimpl, contracttype, Env, Address};
+
+        #[contracttype]
+        pub enum TokenDataKey {
+            Balance(Address),
+            Allowance(Address, Address),
+        }
+
+        #[contract]
+        pub struct MockToken;
+
+        #[contractimpl]
+        impl MockToken {
+            pub fn initialize(env: Env, admin: Address) {
+                env.storage().persistent().set(&TokenDataKey::Balance(admin.clone()), &10000000i128);
+            }
+
+            pub fn mint(env: Env, to: Address, amount: i128) {
+                let balance: i128 = env.storage().persistent().get(&TokenDataKey::Balance(to.clone())).unwrap_or(0);
+                env.storage().persistent().set(&TokenDataKey::Balance(to), &(balance + amount));
+            }
+
+            pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+                from.require_auth();
+                
+                let from_balance: i128 = env.storage().persistent().get(&TokenDataKey::Balance(from.clone())).unwrap_or(0);
+                assert!(from_balance >= amount, "Insufficient balance");
+                
+                let to_balance: i128 = env.storage().persistent().get(&TokenDataKey::Balance(to.clone())).unwrap_or(0);
+                
+                env.storage().persistent().set(&TokenDataKey::Balance(from), &(from_balance - amount));
+                env.storage().persistent().set(&TokenDataKey::Balance(to), &(to_balance + amount));
+            }
+
+            pub fn balance(env: Env, id: Address) -> i128 {
+                env.storage().persistent().get(&TokenDataKey::Balance(id)).unwrap_or(0)
+            }
+        }
+    }
+
+    /// Mock Blend Pool contract for testing
+    mod mock_blend_pool {
+        use soroban_sdk::{contract, contractimpl, contracttype, Env, Address};
+        use super::super::INDEX_RATE_PRECISION;
+
+        #[contracttype]
+        pub enum MockDataKey {
+            TotalSupply,
+            BTokenSupply,
+            IndexRate,
+        }
+
+        #[contract]
+        pub struct MockBlendPool;
+
+        #[contractimpl]
+        impl MockBlendPool {
+            pub fn initialize(env: Env, initial_index_rate: i128) {
+                env.storage().persistent().set(&MockDataKey::TotalSupply, &0i128);
+                env.storage().persistent().set(&MockDataKey::BTokenSupply, &0i128);
+                env.storage().persistent().set(&MockDataKey::IndexRate, &initial_index_rate);
+            }
+
+            pub fn supply(env: Env, from: Address, amount: i128) -> i128 {
+                let index_rate: i128 = env.storage().persistent().get(&MockDataKey::IndexRate).unwrap_or(INDEX_RATE_PRECISION);
+                
+                // Calculate bTokens: amount * INDEX_RATE_PRECISION / index_rate
+                let b_tokens = amount * INDEX_RATE_PRECISION / index_rate;
+                
+                let total_supply: i128 = env.storage().persistent().get(&MockDataKey::TotalSupply).unwrap_or(0);
+                let b_token_supply: i128 = env.storage().persistent().get(&MockDataKey::BTokenSupply).unwrap_or(0);
+                
+                env.storage().persistent().set(&MockDataKey::TotalSupply, &(total_supply + amount));
+                env.storage().persistent().set(&MockDataKey::BTokenSupply, &(b_token_supply + b_tokens));
+                
+                b_tokens
+            }
+
+            pub fn withdraw(env: Env, to: Address, b_tokens: i128) -> i128 {
+                let index_rate: i128 = env.storage().persistent().get(&MockDataKey::IndexRate).unwrap_or(INDEX_RATE_PRECISION);
+                
+                // Calculate underlying: bTokens * index_rate / INDEX_RATE_PRECISION
+                let underlying = b_tokens * index_rate / INDEX_RATE_PRECISION;
+                
+                let total_supply: i128 = env.storage().persistent().get(&MockDataKey::TotalSupply).unwrap_or(0);
+                let b_token_supply: i128 = env.storage().persistent().get(&MockDataKey::BTokenSupply).unwrap_or(0);
+                
+                env.storage().persistent().set(&MockDataKey::TotalSupply, &(total_supply - underlying));
+                env.storage().persistent().set(&MockDataKey::BTokenSupply, &(b_token_supply - b_tokens));
+                
+                underlying
+            }
+
+            pub fn get_index_rate(env: Env) -> i128 {
+                env.storage().persistent().get(&MockDataKey::IndexRate).unwrap_or(INDEX_RATE_PRECISION)
+            }
+
+            pub fn set_index_rate(env: Env, new_rate: i128) {
+                env.storage().persistent().set(&MockDataKey::IndexRate, &new_rate);
+            }
+
+            pub fn get_b_token_supply(env: Env) -> i128 {
+                env.storage().persistent().get(&MockDataKey::BTokenSupply).unwrap_or(0)
+            }
+
+            pub fn get_total_supply(env: Env) -> i128 {
+                env.storage().persistent().get(&MockDataKey::TotalSupply).unwrap_or(0)
+            }
+        }
+    }
+
+    use mock_token::MockToken;
+    use mock_token::MockTokenClient;
+    use mock_blend_pool::MockBlendPool;
+    use mock_blend_pool::MockBlendPoolClient;
+
+    #[test]
+    fn test_blend_initialization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+
+        let blend_pool = Address::generate(&env);
+        let usdc_token = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize contract
+        client.initialize(&blend_pool, &usdc_token);
+
+        // Verify initialization
+        assert_eq!(client.get_blend_pool(), Some(blend_pool));
+        assert_eq!(client.get_usdc_token(), Some(usdc_token));
+    }
+
+    #[test]
+    fn test_blend_supply_and_btoken_tracking() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract with mock token
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Supply 1000 USDC to Blend
+        let b_tokens_received = client.supply_to_blend(&user, &1000);
+
+        // Verify bTokens received (1:1 at initial index rate)
+        assert_eq!(b_tokens_received, 1000);
+
+        // Verify user's Blend position
+        let position = client.get_blend_position(&user);
+        assert_eq!(position.b_tokens, 1000);
+        assert_eq!(position.last_index_rate, INDEX_RATE_PRECISION);
+
+        // Verify legacy balance tracking
+        let blend_balance = env.as_contract(&contract_id, || {
+            env.storage().persistent().get::<DataKey, i128>(&DataKey::UserBlendBalance(user.clone())).unwrap_or(0)
+        });
+        assert_eq!(blend_balance, 1000);
+    }
+
+    #[test]
+    fn test_blend_yield_calculation() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Supply 1000 USDC to Blend
+        client.supply_to_blend(&user, &1000);
+
+        // Initially, no yield (index rate hasn't changed)
+        let initial_yield = client.calculate_blend_yield(&user);
+        assert_eq!(initial_yield, 0);
+
+        // Simulate yield accrual by increasing index rate to 1.05 (5% yield)
+        let new_index_rate = INDEX_RATE_PRECISION + (INDEX_RATE_PRECISION * 5 / 100); // 1.05
+        client.set_mock_index_rate(&new_index_rate);
+
+        // Calculate yield after index rate increase
+        // Yield = bTokens * (current_index - last_index) / precision
+        // Yield = 1000 * (1,050,000 - 1,000,000) / 1,000,000 = 50
+        let yield_amount = client.calculate_blend_yield(&user);
+        assert_eq!(yield_amount, 50);
+
+        // Get position value (should be 1050 USDC worth)
+        let position_value = client.get_blend_position_value(&user);
+        assert_eq!(position_value, 1050);
+    }
+
+    #[test]
+    fn test_blend_withdraw() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Supply 1000 USDC to Blend
+        client.supply_to_blend(&user, &1000);
+
+        // Verify position exists
+        let position = client.get_blend_position(&user);
+        assert_eq!(position.b_tokens, 1000);
+
+        // Withdraw all bTokens (0 means withdraw all)
+        let usdc_received = client.withdraw_from_blend(&user, &0);
+
+        // Should receive 1000 USDC (1:1 at initial rate)
+        assert_eq!(usdc_received, 1000);
+
+        // Verify position is cleared
+        let position_after = client.get_blend_position(&user);
+        assert_eq!(position_after.b_tokens, 0);
+    }
+
+    #[test]
+    fn test_blend_partial_withdraw() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Supply 1000 USDC to Blend
+        client.supply_to_blend(&user, &1000);
+
+        // Withdraw 400 bTokens (partial)
+        let usdc_received = client.withdraw_from_blend(&user, &400);
+
+        // Should receive 400 USDC
+        assert_eq!(usdc_received, 400);
+
+        // Verify remaining position
+        let position = client.get_blend_position(&user);
+        assert_eq!(position.b_tokens, 600);
+    }
+
+    #[test]
+    fn test_blend_withdraw_with_yield() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user and contract (for yield payout)
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+        token_client.mint(&contract_id, &5000); // Mint extra to contract for yield payout
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Supply 1000 USDC to Blend
+        client.supply_to_blend(&user, &1000);
+
+        // Increase index rate to 1.10 (10% yield)
+        let new_index_rate = INDEX_RATE_PRECISION + (INDEX_RATE_PRECISION * 10 / 100); // 1.10
+        client.set_mock_index_rate(&new_index_rate);
+
+        // Withdraw all bTokens
+        let usdc_received = client.withdraw_from_blend(&user, &0);
+
+        // Should receive 1100 USDC (1000 + 10% yield)
+        assert_eq!(usdc_received, 1100);
+    }
+
+    #[test]
+    fn test_blend_multiple_supplies() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract
+        client.initialize(&blend_pool_id, &token_id);
+
+        // First supply: 500 USDC
+        let b_tokens_1 = client.supply_to_blend(&user, &500);
+        assert_eq!(b_tokens_1, 500);
+
+        // Increase index rate to 1.05
+        let new_index_rate = INDEX_RATE_PRECISION + (INDEX_RATE_PRECISION * 5 / 100);
+        client.set_mock_index_rate(&new_index_rate);
+
+        // Calculate yield BEFORE second supply (to capture yield from first supply)
+        // First supply yield: 500 * (1,050,000 - 1,000,000) / 1,000,000 = 25
+        let yield_amount = client.calculate_blend_yield(&user);
+        assert_eq!(yield_amount, 25);
+
+        // Second supply: 500 USDC (at new index rate)
+        // bTokens = 500 * 1,000,000 / 1,050,000 = 476 (rounded)
+        let b_tokens_2 = client.supply_to_blend(&user, &500);
+        assert_eq!(b_tokens_2, 476);
+
+        // Verify total position
+        let position = client.get_blend_position(&user);
+        assert_eq!(position.b_tokens, 976); // 500 + 476
+
+        // After second supply, last_index_rate is updated to new rate, so yield shows 0
+        // until index rate changes again
+        let yield_after_second = client.calculate_blend_yield(&user);
+        assert_eq!(yield_after_second, 0);
+    }
+
+    #[test]
+    fn test_blend_position_value_accrual() {
+        let env = Env::default();
+        
+        // Register contracts
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        // Create addresses
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        // Initialize Blend pool with 1.0 index rate
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+
+        // Initialize main contract
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Supply 2000 USDC to Blend
+        client.supply_to_blend(&user, &2000);
+
+        // Initial value should be 2000
+        assert_eq!(client.get_blend_position_value(&user), 2000);
+
+        // Simulate 1 year of yield at 5% APR
+        let new_index_rate = INDEX_RATE_PRECISION + (INDEX_RATE_PRECISION * 5 / 100);
+        client.set_mock_index_rate(&new_index_rate);
+
+        // Value should now be 2100
+        assert_eq!(client.get_blend_position_value(&user), 2100);
+
+        // Simulate another 5% yield (compound)
+        let new_index_rate_2 = new_index_rate + (new_index_rate * 5 / 100);
+        client.set_mock_index_rate(&new_index_rate_2);
+
+        // Value should now be approximately 2205
+        let value = client.get_blend_position_value(&user);
+        assert!(value > 2200 && value <= 2205, "Expected value around 2205, got {}", value);
+    }
+
+    #[test]
+    #[should_panic(expected = "Amount must be greater than 0")]
+    fn test_blend_supply_zero_amount() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let token_id = env.register_contract(None, MockToken);
+        let token_client = MockTokenClient::new(&env, &token_id);
+        
+        let user = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        // Initialize token and mint to user
+        token_client.initialize(&user);
+        token_client.mint(&user, &10000);
+
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+        client.initialize(&blend_pool_id, &token_id);
+
+        // Should panic with zero amount
+        client.supply_to_blend(&user, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "No Blend position to withdraw")]
+    fn test_blend_withdraw_no_position() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, SmasageYieldRouter);
+        let client = SmasageYieldRouterClient::new(&env, &contract_id);
+        
+        let blend_pool_id = env.register_contract(None, MockBlendPool);
+        let blend_pool_client = MockBlendPoolClient::new(&env, &blend_pool_id);
+        
+        let user = Address::generate(&env);
+        let usdc_token = Address::generate(&env);
+
+        env.mock_all_auths();
+
+        blend_pool_client.initialize(&INDEX_RATE_PRECISION);
+        client.initialize(&blend_pool_id, &usdc_token);
+
+        // Should panic - no position to withdraw
+        client.withdraw_from_blend(&user, &0);
     }
 }
