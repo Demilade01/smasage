@@ -56,7 +56,7 @@ export default function PortfolioChart({
     percentage: number,
     event: React.MouseEvent<SVGPathElement>
   ) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
+    const rect = (event.currentTarget.parentElement as Element)?.getBoundingClientRect();
     if (rect) {
       setTooltipPos({
         x: event.clientX - rect.left,
