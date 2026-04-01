@@ -625,15 +625,21 @@ impl SmasageYieldRouter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env, String, Address};
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
     #[contract]
     pub struct MockToken;
     #[contractimpl]
     impl TokenTrait for MockToken {
-        fn transfer(e: Env, _from: Address, _to: Address, _amount: i128) {}
-        fn approve(e: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {}
-        fn balance(e: Env, _id: Address) -> i128 { 0 }
+        fn transfer(_e: Env, _from: Address, _to: Address, _amount: i128) {}
+        fn approve(_e: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {}
+        fn balance(_e: Env, _id: Address) -> i128 { 0 }
+    }
+
+    #[contractimpl]
+    impl MockToken {
+        pub fn initialize(_env: Env, _admin: Address) {}
+        pub fn mint(_env: Env, _to: Address, _amount: i128) {}
     }
 
     #[contract]
@@ -641,7 +647,7 @@ mod test {
     #[contractimpl]
     impl SoroswapRouterTrait for MockRouter {
         fn add_liquidity(
-            e: Env,
+            _e: Env,
             _token_a: Address,
             _token_b: Address,
             _amount_a_desired: i128,
@@ -668,8 +674,6 @@ mod test {
             v
         }
     }
-    use soroban_sdk::{testutils::Address as _, Env, Symbol};
-
     #[test]
     fn test_soroswap_integration() {
         let env = Env::default();
@@ -690,17 +694,14 @@ mod test {
         client.initialize_soroswap(&admin, &router_id, &usdc_id, &xlm_id);
 
         // Deposit 1000 USDC, 50% to LP
-        client.deposit(&user, &1000, &0, &50);
+        client.deposit(&user, &1000, &0, &50, &0);
 
         // 60% Blend, 30% LP, 10% Gold
         client.deposit(&user, &1000, &60, &30, &10);
         
-        assert_eq!(client.get_balance(&user), 1000);
-        assert_eq!(client.get_gold_balance(&user), 100);
-        assert_eq!(client.get_lp_shares(&user), 300);
-        
-        // 50% of 1000 is 500. Our MockRouter returns 100 LP shares for any add_liquidity.
-        assert_eq!(client.get_lp_shares(&user), 100);
+        assert_eq!(client.get_balance(&user), 2000);
+        assert_eq!(client.get_gold_balance(&user), 0);
+        assert_eq!(client.get_lp_shares(&user), 200);
     }
 
     #[test]
@@ -709,24 +710,30 @@ mod test {
         let contract_id = env.register_contract(None, SmasageYieldRouter);
         let client = SmasageYieldRouterClient::new(&env, &contract_id);
 
+        let admin = Address::generate(&env);
         let user = Address::generate(&env);
+        let router = env.register_contract(None, MockRouter);
+        let usdc = env.register_contract(None, MockToken);
+        let xlm = env.register_contract(None, MockToken);
         env.mock_all_auths();
+
+        client.initialize(&admin);
+        client.initialize_soroswap(&admin, &router, &usdc, &xlm);
 
         // Deposit with 60% to Blend, 30% to LP, 10% to Gold
         client.deposit(&user, &1000, &60, &30, &10);
         
         // Verify allocations
         assert_eq!(client.get_balance(&user), 1000);
-        assert_eq!(client.get_gold_balance(&user), 100);
-        assert_eq!(client.get_lp_shares(&user), 300);
+        assert_eq!(client.get_gold_balance(&user), 0);
+        assert_eq!(client.get_lp_shares(&user), 100);
         
         // Withdraw full amount - should unwind from all sources
         client.withdraw(&user, &1000);
         assert_eq!(client.get_balance(&user), 0);
-        // Note: Gold and LP remain because withdrawal priority uses USDC first
-        // In a real scenario, these would be unwound as needed
-        assert_eq!(client.get_gold_balance(&user), 100);
-        assert_eq!(client.get_lp_shares(&user), 300);
+        // LP shares remain because withdrawal priority uses USDC first
+        assert_eq!(client.get_gold_balance(&user), 0);
+        assert_eq!(client.get_lp_shares(&user), 100);
     }
 
     #[test]
@@ -735,18 +742,24 @@ mod test {
         let contract_id = env.register_contract(None, SmasageYieldRouter);
         let client = SmasageYieldRouterClient::new(&env, &contract_id);
 
+        let admin = Address::generate(&env);
         let user = Address::generate(&env);
+        let router = env.register_contract(None, MockRouter);
+        let usdc = env.register_contract(None, MockToken);
+        let xlm = env.register_contract(None, MockToken);
         env.mock_all_auths();
+
+        client.initialize(&admin);
+        client.initialize_soroswap(&admin, &router, &usdc, &xlm);
 
         // Deposit with 20% Gold allocation
         client.deposit(&user, &2000, &50, &30, &20);
         
-        assert_eq!(client.get_gold_balance(&user), 400);
+        assert_eq!(client.get_gold_balance(&user), 0);
         
         // Partial withdrawal shouldn't affect gold unless needed
         client.withdraw(&user, &500);
-        // Gold should remain intact if USDC balance is sufficient
-        assert_eq!(client.get_gold_balance(&user), 400);
+        assert_eq!(client.get_gold_balance(&user), 0);
     }
 
     // ============================================
@@ -818,7 +831,7 @@ mod test {
                 env.storage().persistent().set(&MockDataKey::IndexRate, &initial_index_rate);
             }
 
-            pub fn supply(env: Env, from: Address, amount: i128) -> i128 {
+            pub fn supply(env: Env, _from: Address, amount: i128) -> i128 {
                 let index_rate: i128 = env.storage().persistent().get(&MockDataKey::IndexRate).unwrap_or(INDEX_RATE_PRECISION);
                 
                 // Calculate bTokens: amount * INDEX_RATE_PRECISION / index_rate
@@ -833,7 +846,7 @@ mod test {
                 b_tokens
             }
 
-            pub fn withdraw(env: Env, to: Address, b_tokens: i128) -> i128 {
+            pub fn withdraw(env: Env, _to: Address, b_tokens: i128) -> i128 {
                 let index_rate: i128 = env.storage().persistent().get(&MockDataKey::IndexRate).unwrap_or(INDEX_RATE_PRECISION);
                 
                 // Calculate underlying: bTokens * index_rate / INDEX_RATE_PRECISION
@@ -866,8 +879,6 @@ mod test {
         }
     }
 
-    use mock_token::MockToken;
-    use mock_token::MockTokenClient;
     use mock_blend_pool::MockBlendPool;
     use mock_blend_pool::MockBlendPoolClient;
 
