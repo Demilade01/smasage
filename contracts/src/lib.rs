@@ -391,7 +391,7 @@ impl SmasageYieldRouter {
 
     /// Get the current mock index rate (for testing only)
     /// In production, this would query the actual Blend pool
-    pub fn get_mock_index_rate(env: Env) -> i128 {
+    pub fn get_mock_index_rate(_env: Env) -> i128 {
         // This is a test helper - in production, this reads from actual Blend pool
         // For now, return the default precision
         INDEX_RATE_PRECISION
