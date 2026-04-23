@@ -1,6 +1,7 @@
 "use client"
 import React, { useState, useEffect, useRef } from 'react';
-import { Bot, Send, Wallet, TrendingUp, Target, Activity, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Bot, Send, Target, Activity, CheckCircle2, AlertCircle } from 'lucide-react';
+import { PortfolioStats } from './components/PortfolioStats';
 import { evaluateGoalStatus, formatCurrency, getStatusColor, type GoalData } from '../utils/goalProjection';
 import PortfolioChart from './PortfolioChart';
 import { parseAllocationsFromMessage, getDefaultAllocations } from '../utils/allocationParser';
@@ -138,53 +139,9 @@ export default function Home() {
     }, 1800);
   };
 
-  const modalStyles = `
-  .modal-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-  .modal-content {
-    background: #18181b;
-    color: #fff;
-    padding: 2rem 2.5rem;
-    border-radius: 16px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.25);
-    text-align: center;
-    min-width: 320px;
-  }
-  .install-link {
-    display: inline-block;
-    margin: 1rem 0;
-    color: #8b5cf6;
-    font-weight: 600;
-    text-decoration: underline;
-  }
-  .close-modal {
-    background: #27272a;
-    color: #fff;
-    border: none;
-    padding: 0.5rem 1.5rem;
-    border-radius: 8px;
-    cursor: pointer;
-    margin-top: 1rem;
-  }
-  `;
-
-  if (typeof window !== 'undefined' && !document.getElementById('modal-styles')) {
-    const style = document.createElement('style');
-    style.id = 'modal-styles';
-    style.innerHTML = modalStyles;
-    document.head.appendChild(style);
-  }
-
   return (
     <>
-      <DashboardHeader>
+      <DashboardHeader wsConnected={wsConnected}>
         <ConnectWalletButton onClick={handleConnectWallet} publicKey={publicKey || undefined} />
       </DashboardHeader>
       {showInstallModal && (
@@ -205,28 +162,11 @@ export default function Home() {
           Real-time on-chain tracking • Stellar Mainnet 🚀
         </p>
 
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-label">
-              <Wallet size={16} color="var(--accent-primary)" />
-              Total Value
-            </div>
-            <div className="stat-value">
-              $12,450
-              <span className="stat-sub">+12.4%</span>
-            </div>
-          </div>
-          <div className="stat-card secondary">
-            <div className="stat-label">
-              <TrendingUp size={16} color="var(--accent-secondary)" />
-              Est. Monthly APY
-            </div>
-            <div className="stat-value">
-              8.5%
-              <span className="stat-sub">Active</span>
-            </div>
-          </div>
-        </div>
+        <PortfolioStats
+          totalValue={goalData.currentBalance}
+          apy={goalData.expectedAPY}
+          valueChange={12.4}
+        />
 
         <div className="goal-section">
           <div className="goal-header">

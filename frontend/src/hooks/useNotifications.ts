@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useCallback, useRef } from 'react';
+import { WS_URL, WS_MAX_RECONNECT_ATTEMPTS, WS_MAX_RECONNECT_DELAY_MS } from '../config/constants';
 
 export interface IncomingNotification {
   type: 'connected' | 'notification' | 'agent-message' | 'pong';
@@ -24,15 +25,13 @@ export function useNotifications(options: UseNotificationsOptions) {
   const { userId, onNotification, onError, enabled = true } = options;
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 5;
+  const maxReconnectAttempts = WS_MAX_RECONNECT_ATTEMPTS;
 
   const connect = useCallback(() => {
     if (!enabled || !userId) return;
 
     try {
-      const wsUrl = `${
-        process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001'
-      }?userId=${encodeURIComponent(userId)}`;
+      const wsUrl = `${WS_URL}?userId=${encodeURIComponent(userId)}`;
 
       console.log('[WS] Connecting to:', wsUrl);
       const ws = new WebSocket(wsUrl);
@@ -73,7 +72,7 @@ export function useNotifications(options: UseNotificationsOptions) {
 
         // Attempt reconnection with exponential backoff
         if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), WS_MAX_RECONNECT_DELAY_MS);
           reconnectAttemptsRef.current++;
           console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
           setTimeout(connect, delay);
