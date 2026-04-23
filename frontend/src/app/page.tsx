@@ -24,12 +24,12 @@ export default function Home() {
   const [showInstallModal, setShowInstallModal] = useState(false);
     // Connect Wallet logic
     const handleConnectWallet = async () => {
-      if (!(window as any).freighterApi) {
+      if (!window.freighterApi) {
         setShowInstallModal(true);
         return;
       }
       try {
-        const key = await (window as any).freighterApi.getPublicKey();
+        const key = await window.freighterApi.getPublicKey();
         setPublicKey(key);
       } catch (e) {
         // Optionally handle rejection
