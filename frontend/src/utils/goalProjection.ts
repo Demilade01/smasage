@@ -49,9 +49,14 @@ export function calculateProjection(
 export function getMonthsUntil(targetDateStr: string): number {
   const target = new Date(targetDateStr);
   const now = new Date();
-  const diffTime = target.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return Math.max(0, Math.floor(diffDays / 30.44));
+  
+  if (isNaN(target.getTime())) return 0;
+  
+  const months = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth());
+  
+  // Adjust if today's day of month is after target day of month (optional, but makes it "complete" months)
+  // For simplicity in projections, we often just use the month difference.
+  return Math.max(0, months);
 }
 
 /**

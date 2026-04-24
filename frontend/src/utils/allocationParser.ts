@@ -23,7 +23,7 @@ export function parseAllocationsFromMessage(
   const allocations: AssetAllocation[] = [];
 
   // Pattern 1: "X% to Asset Name" or "allocate X% to Asset"
-  const percentPattern = /(\d+(?:\.\d+)?)\s*%\s*(?:to\s+)?([^,.—•\n]+?)(?:\s*(?:for|with|to)|$|[,.—•\n])/gi;
+  const percentPattern = /(\d+(?:\.\d+)?)\s*%\s*(?:to\s+)?([^,.—•\n]+?)(?:\s*\b(?:for|with|to)\b|$|[,.—•\n])/gi;
   
   let match;
   let totalPercentage = 0;
