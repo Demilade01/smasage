@@ -10,6 +10,7 @@ import { useNotifications } from '../hooks/useNotifications';
 import { DashboardHeader } from './components/DashboardHeader';
 import { ConnectWalletButton } from './components/ConnectWalletButton';
 import { useWallet } from './components/WalletContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 interface Message {
   id: number;
@@ -140,120 +141,122 @@ export default function Home() {
   };
 
   return (
-    <>
-      <DashboardHeader wsConnected={wsConnected}>
-        <ConnectWalletButton onClick={handleConnectWallet} publicKey={publicKey || undefined} />
-      </DashboardHeader>
-      {showInstallModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h2>Freighter Wallet Not Detected</h2>
-            <p>Please install the Freighter browser extension to connect your wallet.</p>
-            <a href="https://freighter.app/" target="_blank" rel="noopener noreferrer" className="install-link">Install Freighter</a>
-            <button onClick={() => setShowInstallModal(false)} className="close-modal">Close</button>
-          </div>
-        </div>
-      )}
-      <main className="app-container">
-      {/* Left Panel - Dashboard */}
-      <div className="glass-panel">
-        <h1>Smasage Portfolio</h1>
-        <p className="text-muted" style={{ marginBottom: '2.5rem' }}>
-          Real-time on-chain tracking • Stellar Mainnet 🚀
-        </p>
-
-        <PortfolioStats
-          totalValue={goalData.currentBalance}
-          apy={goalData.expectedAPY}
-          valueChange={12.4}
-        />
-
-        <div className="goal-section">
-          <div className="goal-header">
-            <div>
-              <h3 style={{ fontSize: '1.25rem', marginBottom: '4px' }}>European Vacation</h3>
-              <p className="text-muted" style={{ fontSize: '0.9rem' }}>Target: $18,000 by Aug 2026</p>
-              <p style={{ fontSize: '0.85rem', color: getStatusColor(goalStatus), fontWeight: 600, marginTop: '4px' }}>
-                Status: {goalStatus}
-              </p>
+    <ErrorBoundary fallbackMessage="The dashboard failed to load. Please try again.">
+      <>
+        <DashboardHeader wsConnected={wsConnected}>
+          <ConnectWalletButton onClick={handleConnectWallet} publicKey={publicKey || undefined} />
+        </DashboardHeader>
+        {showInstallModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <h2>Freighter Wallet Not Detected</h2>
+              <p>Please install the Freighter browser extension to connect your wallet.</p>
+              <a href="https://freighter.app/" target="_blank" rel="noopener noreferrer" className="install-link">Install Freighter</a>
+              <button onClick={() => setShowInstallModal(false)} className="close-modal">Close</button>
             </div>
-            <Target size={32} color={getStatusColor(goalStatus)} opacity={0.8} />
           </div>
+        )}
+        <main className="app-container">
+        {/* Left Panel - Dashboard */}
+        <div className="glass-panel">
+          <h1>Smasage Portfolio</h1>
+          <p className="text-muted" style={{ marginBottom: '2.5rem' }}>
+            Real-time on-chain tracking • Stellar Mainnet 🚀
+          </p>
 
-          <div className="progress-bar-container">
-            <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-            <span>68% Completed</span>
-            <span>$5,550 Remaining</span>
-          </div>
-        </div>
-
-        <div className="allocation-list">
-          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', marginBottom: '1.25rem', marginTop: '1rem' }}>
-            <Activity size={18} /> Active Strategy Routes
-          </h3>
-          
-          <PortfolioChart 
-            allocations={allocations}
-            width={320}
-            height={280}
-            showLegend={true}
-            animated={true}
+          <PortfolioStats
+            totalValue={goalData.currentBalance}
+            apy={goalData.expectedAPY}
+            valueChange={12.4}
           />
-        </div>
-      </div>
 
-      {/* Right Panel - Chat Agent */}
-      <div className="glass-panel">
-        <div className="chat-container">
-          <div className="chat-header">
-            <div className="agent-avatar">
-              <Bot size={28} />
-            </div>
-            <div>
-              <h2 style={{ margin: 0, fontSize: '1.25rem' }}>OpenClaw Agent</h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--success)' }}>
-                <CheckCircle2 size={12} fill="var(--success)" color="var(--bg-card)" /> Online
+          <div className="goal-section">
+            <div className="goal-header">
+              <div>
+                <h3 style={{ fontSize: '1.25rem', marginBottom: '4px' }}>European Vacation</h3>
+                <p className="text-muted" style={{ fontSize: '0.9rem' }}>Target: $18,000 by Aug 2026</p>
+                <p style={{ fontSize: '0.85rem', color: getStatusColor(goalStatus), fontWeight: 600, marginTop: '4px' }}>
+                  Status: {goalStatus}
+                </p>
               </div>
+              <Target size={32} color={getStatusColor(goalStatus)} opacity={0.8} />
+            </div>
+
+            <div className="progress-bar-container">
+              <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+              <span>68% Completed</span>
+              <span>$5,550 Remaining</span>
             </div>
           </div>
 
-          <div className="chat-messages">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`message ${msg.sender}`}>
-                {msg.proactive && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--accent-primary)', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>
-                    <AlertCircle size={12} /> Proactive Nudge
-                  </div>
-                )}
-                <div className="message-bubble">{msg.text}</div>
+          <div className="allocation-list">
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', marginBottom: '1.25rem', marginTop: '1rem' }}>
+              <Activity size={18} /> Active Strategy Routes
+            </h3>
+
+            <PortfolioChart
+              allocations={allocations}
+              width={320}
+              height={280}
+              showLegend={true}
+              animated={true}
+            />
+          </div>
+        </div>
+
+        {/* Right Panel - Chat Agent */}
+        <div className="glass-panel">
+          <div className="chat-container">
+            <div className="chat-header">
+              <div className="agent-avatar">
+                <Bot size={28} />
               </div>
-            ))}
-            {isTyping && (
-              <div className="message agent">
-                <div className="typing-indicator">
-                  <span></span><span></span><span></span>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.25rem' }}>OpenClaw Agent</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--success)' }}>
+                  <CheckCircle2 size={12} fill="var(--success)" color="var(--bg-card)" /> Online
                 </div>
               </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
+            </div>
 
-          <form onSubmit={handleSendMessage} className="chat-input-container">
-            <input
-              type="text"
-              placeholder="Ask Smasage to adjust goals..."
-              value={inputState}
-              onChange={(e) => setInputState(e.target.value)}
-            />
-            <button type="submit" className="send-button">
-              <Send size={18} />
-            </button>
-          </form>
+            <div className="chat-messages">
+              {messages.map((msg) => (
+                <div key={msg.id} className={`message ${msg.sender}`}>
+                  {msg.proactive && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--accent-primary)', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>
+                      <AlertCircle size={12} /> Proactive Nudge
+                    </div>
+                  )}
+                  <div className="message-bubble">{msg.text}</div>
+                </div>
+              ))}
+              {isTyping && (
+                <div className="message agent">
+                  <div className="typing-indicator">
+                    <span></span><span></span><span></span>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <form onSubmit={handleSendMessage} className="chat-input-container">
+              <input
+                type="text"
+                placeholder="Ask Smasage to adjust goals..."
+                value={inputState}
+                onChange={(e) => setInputState(e.target.value)}
+              />
+              <button type="submit" className="send-button">
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
         </div>
-      </div>
-    </main>
-    </>
+      </main>
+      </>
+    </ErrorBoundary>
   );
 }

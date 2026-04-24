@@ -29,3 +29,7 @@ Thumbs.db
 .soroban
 issues.md
 .env
+
+# Local superpowers specs/plans (not for upstream)
+docs/superpowers/
+.claude/
