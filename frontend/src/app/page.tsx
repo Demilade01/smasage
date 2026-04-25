@@ -41,8 +41,13 @@ interface Message {
 }
 
 export default function Home() {
-  const { publicKey, connect, showInstallModal, setShowInstallModal } =
-    useFreighter();
+  const { 
+    publicKey, 
+    connect, 
+    showInstallModal, 
+    setShowInstallModal,
+    isConnecting 
+  } = useFreighter();
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -174,6 +179,7 @@ export default function Home() {
           <ConnectWalletButton
             onClick={connect}
             publicKey={publicKey || undefined}
+            isConnecting={isConnecting}
           />
         </DashboardHeader>
 

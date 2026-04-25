@@ -6,13 +6,33 @@ import { useWallet } from "../app/components/WalletContext";
  * Encapsulates connection logic, installation checks, and state management.
  */
 export function useFreighter() {
-  const { publicKey, setPublicKey } = useWallet();
+  const { publicKey, setPublicKey, isConnecting, setIsConnecting } =
+    useWallet();
   const [isInstalled, setIsInstalled] = useState<boolean>(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
 
-  // Check for Freighter on mount
+  // Check for Freighter on mount and with polling
   useEffect(() => {
-    setIsInstalled(!!window.freighterApi);
+    // Initial check
+    if (window.freighterApi) {
+      setIsInstalled(true);
+      return;
+    }
+
+    // Polling for 3 seconds as extensions might inject late
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      if (window.freighterApi) {
+        setIsInstalled(true);
+        clearInterval(interval);
+      } else if (attempts >= 20) {
+        // 6 * 500ms = 3s
+        clearInterval(interval);
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
   }, []);
 
   /**
@@ -20,20 +40,29 @@ export function useFreighter() {
    * If not installed, shows the installation modal.
    */
   const connect = useCallback(async () => {
-    if (!window.freighterApi) {
+    // Lazy check in case it was injected after the last effect run
+    const api = window.freighterApi;
+
+    if (!api) {
       setShowInstallModal(true);
       return null;
     }
 
+    // Update isInstalled state if we found it lazily
+    setIsInstalled(true);
+
+    setIsConnecting(true);
     try {
-      const key = await window.freighterApi.getPublicKey();
+      const key = await api.getPublicKey();
       setPublicKey(key);
       return key;
     } catch (error) {
       console.error("[useFreighter] Connection failed:", error);
       return null;
+    } finally {
+      setIsConnecting(false);
     }
-  }, [setPublicKey]);
+  }, [setPublicKey, setIsConnecting]);
 
   /**
    * Disconnects the wallet by clearing the public key from global context.
@@ -45,6 +74,7 @@ export function useFreighter() {
   return {
     publicKey,
     isConnected: !!publicKey,
+    isConnecting,
     isInstalled,
     showInstallModal,
     setShowInstallModal,
