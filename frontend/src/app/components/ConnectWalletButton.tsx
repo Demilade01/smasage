@@ -17,15 +17,23 @@ export const ConnectWalletButton: React.FC<ConnectWalletButtonProps> = ({
   publicKey, 
   isConnecting = false 
 }) => {
+  const ariaLabel = isConnecting
+    ? 'Connecting wallet, please wait'
+    : publicKey
+    ? `Wallet connected: ${truncatePublicKey(publicKey)}`
+    : 'Connect Stellar wallet';
+
   return (
     <button 
       onClick={onClick} 
       className={`connect-wallet-btn ${isConnecting ? 'connecting' : ''}`}
       disabled={isConnecting}
+      aria-label={ariaLabel}
+      aria-busy={isConnecting}
     >
       {isConnecting ? (
         <>
-          <Loader2 className="spinner" size={16} />
+          <Loader2 className="spinner" size={16} aria-hidden="true" />
           <span>Connecting...</span>
         </>
       ) : (
@@ -34,3 +42,4 @@ export const ConnectWalletButton: React.FC<ConnectWalletButtonProps> = ({
     </button>
   );
 };
+

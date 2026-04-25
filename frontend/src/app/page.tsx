@@ -187,7 +187,7 @@ export default function Home() {
           isOpen={showInstallModal}
           onClose={() => setShowInstallModal(false)}
         />
-        <main className="app-container">
+        <main className="app-container" aria-label="Portfolio dashboard">
           {/* Left Panel - Dashboard */}
           <div className="glass-panel">
             <h1>Smasage Portfolio</h1>
@@ -240,6 +240,11 @@ export default function Home() {
                   <div
                     className="progress-bar-fill"
                     style={{ width: `${progress}%` }}
+                    role="progressbar"
+                    aria-valuenow={Math.round(progress)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label="Savings goal progress"
                   ></div>
                 </div>
                 <div
@@ -268,7 +273,7 @@ export default function Home() {
                   marginTop: "1rem",
                 }}
               >
-                <Activity size={18} /> Active Strategy Routes
+                <Activity size={18} aria-hidden="true" /> Active Strategy Routes
               </h3>
 
               {isLoading ? (
@@ -291,7 +296,7 @@ export default function Home() {
           <div className="glass-panel">
             <div className="chat-container">
               <div className="chat-header">
-                <div className="agent-avatar">
+                <div className="agent-avatar" aria-hidden="true">
                   <Bot size={28} />
                 </div>
                 <div>
@@ -311,13 +316,20 @@ export default function Home() {
                       size={12}
                       fill="var(--success)"
                       color="var(--bg-card)"
+                      aria-hidden="true"
                     />{" "}
                     Online
                   </div>
                 </div>
               </div>
 
-              <div className="chat-messages">
+              <div
+                className="chat-messages"
+                role="log"
+                aria-label="Chat messages"
+                aria-live="polite"
+                aria-relevant="additions"
+              >
                 {messages.map((msg) => (
                   <div key={msg.id} className={`message ${msg.sender}`}>
                     {msg.proactive && (
@@ -333,15 +345,16 @@ export default function Home() {
                           textTransform: "uppercase",
                         }}
                       >
-                        <AlertCircle size={12} /> Proactive Nudge
+                        <AlertCircle size={12} aria-hidden="true" /> Proactive Nudge
                       </div>
                     )}
                     <div className="message-bubble">{msg.text}</div>
                   </div>
                 ))}
                 {isTyping && (
-                  <div className="message agent">
-                    <div className="typing-indicator">
+                  <div className="message agent" role="status">
+                    <span className="sr-only">Agent is typing…</span>
+                    <div className="typing-indicator" aria-hidden="true">
                       <span></span>
                       <span></span>
                       <span></span>
@@ -356,13 +369,19 @@ export default function Home() {
                 className="chat-input-container"
               >
                 <input
+                  id="chat-input"
                   type="text"
                   placeholder="Ask Smasage to adjust goals..."
                   value={inputState}
                   onChange={(e) => setInputState(e.target.value)}
+                  aria-label="Message input"
                 />
-                <button type="submit" className="send-button">
-                  <Send size={18} />
+                <button
+                  type="submit"
+                  className="send-button"
+                  aria-label="Send message"
+                >
+                  <Send size={18} aria-hidden="true" />
                 </button>
               </form>
             </div>

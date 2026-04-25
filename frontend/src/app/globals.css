@@ -11,6 +11,26 @@
   --glass-border: rgba(255, 255, 255, 0.08);
 }
 
+/* ── Accessibility: sr-only ──────────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ── Accessibility: global focus-visible ring ────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -598,10 +618,15 @@ h2 {
 }
 
 .chat-input-container input:focus {
-  outline: none;
+  outline: none; /* replaced by explicit ring below */
   border-color: var(--accent-primary);
   background: rgba(0, 0, 0, 0.45);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15), inset 0 0 8px rgba(139, 92, 246, 0.1);
+}
+
+.chat-input-container input:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
 }
 
 .chat-input-container input::placeholder {
@@ -640,6 +665,13 @@ h2 {
 .send-button:active {
   transform: translateY(-50%) scale(0.95);
   box-shadow: 0 0 8px rgba(139, 92, 246, 0.2), inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.send-button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 3px;
+  /* keep transform while focused via keyboard */
+  transform: translateY(-50%) scale(1.05);
 }
 
 /* Custom Scrollbar */
@@ -922,6 +954,13 @@ h2 {
   transform: rotate(90deg);
 }
 
+.modal-close-icon:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
 .install-link {
   display: inline-block;
   margin-top: 1.5rem;
@@ -939,6 +978,12 @@ h2 {
   transform: scale(1.05);
   filter: brightness(1.1);
   box-shadow: 0 8px 25px rgba(139, 92, 246, 0.4);
+}
+
+.install-link:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 4px;
+  border-radius: 12px;
 }
 
 .close-modal {
@@ -959,6 +1004,12 @@ h2 {
   background: rgba(255, 255, 255, 0.05);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+.close-modal:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 3px;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* ── WS status indicator animations (Issue #48) ─────────────── */
@@ -1025,4 +1076,17 @@ h2 {
 
 .error-retry-btn:hover {
   opacity: 0.85;
+}
+
+.error-retry-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+/* ── Accessibility: connect-wallet focus ─────────────────────── */
+.connect-wallet-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+  border-radius: 12px;
 }
